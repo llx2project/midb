@@ -1,0 +1,6 @@
+Image Index,Age,Sex,View Position,Finding,Labels,Caption
+00000001_001.png,45,M,PA,Normal,"[]",Chest X-ray normal
+00000002_001.png,62,F,AP,Pneumonia,"[""Pneumonia""]",Chest X-ray with pneumonia
+00000003_001.png,35,M,PA,Normal,"[]",Normal chest radiograph
+00000004_001.png,58,F,AP,Atelectasis,"[""Atelectasis""]",Partial lung collapse
+00000005_001.png,41,M,PA,Normal,"[]",Healthy lungs
