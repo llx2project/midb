@@ -1,14 +1,19 @@
 """API endpoints for Medical Image Search Platform"""
 
+import os
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import json
 from datetime import datetime
 
-from src.database import SessionLocal, Tag
-from src.models import Image, Dataset, ImageMetadata
+from src.database import SessionLocal
+from src.models import Image, Dataset, Tag, ImageMetadata
 from src.ai_service import AIService
+from src.auth import get_current_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1", tags=["search"])
 
@@ -31,7 +36,8 @@ async def search_images(
     dataset_id: Optional[int] = Query(None, description="Filter by dataset ID"),
     limit: int = Query(20, ge=1, le=100, description="Number of results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user: Optional[str] = Depends(get_current_user)
 ):
     """
     Search medical images with optional filters.
@@ -50,19 +56,29 @@ async def search_images(
             for tag in tags:
                 q = q.join(Image.tags).filter(Tag.name == tag)
         
-        # Get images
+        # Get total count before pagination
+        total = q.count()
+        
+        # Get images with pagination
         images = q.offset(offset).limit(limit).all()
         
         # If text query provided, use AI to rank results
         if query and images:
-            # Get embeddings for query and images
-            query_embedding = await ai_service.get_text_embedding(query)
-            image_embeddings = await ai_service.get_image_embeddings([img.file_path for img in images])
-            
-            # Compute similarities and reorder
-            similarities = ai_service.compute_similarities(query_embedding, image_embeddings)
-            ranked_images = sorted(zip(images, similarities), key=lambda x: x[1], reverse=True)
-            images = [img for img, _ in ranked_images]
+            # Filter out images with missing file paths
+            valid_images = [img for img in images if img.file_path and os.path.exists(img.file_path)]
+            if valid_images:
+                # Get embeddings for query and images
+                query_embedding = await ai_service.get_text_embedding(query)
+                image_paths = [img.file_path for img in valid_images]
+                image_embeddings = await ai_service.get_image_embeddings(image_paths)
+                
+                # Compute similarities and reorder
+                similarities = ai_service.compute_similarities(query_embedding, image_embeddings)
+                ranked_images = sorted(zip(valid_images, similarities), key=lambda x: x[1], reverse=True)
+                images = [img for img, _ in ranked_images]
+            else:
+                # If no valid images, return empty results
+                images = []
         
         # Prepare response
         results = []
@@ -73,14 +89,18 @@ async def search_images(
             results.append(img_dict)
         
         return {
-            "total": q.count(),
+            "total": total,
             "limit": limit,
             "offset": offset,
-            "results": results
+            "count": len(results),
+            "results": results,
+            "has_next": offset + limit < total,
+            "has_previous": offset > 0
         }
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error in search_images: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error during search")
 
 @router.get("/images/{image_id}/preview")
 async def get_image_preview(image_id: int, db: Session = Depends(get_db)):
@@ -89,14 +109,44 @@ async def get_image_preview(image_id: int, db: Session = Depends(get_db)):
     if not image:
         raise HTTPException(status_code=404, detail="Image not found")
     
-    # In a real implementation, you would serve the actual image file
-    # For now, return metadata and a placeholder
-    return {
-        "image_id": image.id,
-        "file_path": image.file_path,
-        "modality": image.modality,
-        "dimensions": {"width": image.width, "height": image.height}
-    }
+    # Check if file exists
+    if image.file_path and os.path.exists(image.file_path):
+        return {
+            "image_id": image.id,
+            "file_path": image.file_path,
+            "modality": image.modality,
+            "dimensions": {"width": image.width, "height": image.height},
+            "size_bytes": image.size_bytes,
+            "available": True
+        }
+    else:
+        return {
+            "image_id": image.id,
+            "file_path": image.file_path,
+            "modality": image.modality,
+            "dimensions": {"width": image.width, "height": image.height},
+            "available": False,
+            "message": "Image file not found on server"
+        }
+
+@router.get("/images/{image_id}/metadata")
+async def get_image_metadata(image_id: int, db: Session = Depends(get_db)):
+    """Get detailed metadata for a specific image"""
+    image = db.query(Image).filter(Image.id == image_id).first()
+    if not image:
+        raise HTTPException(status_code=404, detail="Image not found")
+    
+    result = image.to_dict()
+    result["dataset_name"] = image.dataset.name if image.dataset else None
+    
+    # Include additional metadata if available
+    if image.image_metadata:
+        result["detailed_metadata"] = image.image_metadata.metadata_json
+    
+    # Include tags
+    result["tags"] = [tag.to_dict() for tag in image.tags] if image.tags else []
+    
+    return result
 
 @router.get("/datasets/{dataset_id}/insights")
 async def get_dataset_insights(dataset_id: int, db: Session = Depends(get_db)):

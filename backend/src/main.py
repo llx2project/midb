@@ -9,6 +9,7 @@ from typing import Callable
 
 from src.api.v1.endpoints import router as api_v1_router
 from src.config import settings
+from src.database import init_db
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -22,6 +23,12 @@ app = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json"
 )
+
+# Initialize database on startup
+@app.on_event("startup")
+async def startup_event():
+    init_db()
+    logger.info("Database initialized")
 
 # CORS middleware
 app.add_middleware(
