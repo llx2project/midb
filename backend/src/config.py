@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     APP_NAME: str = "Medical Image Search Platform"
     APP_VERSION: str = "0.1.0"
     DEBUG: bool = os.getenv("DEBUG", "False").lower() == "true"
+    ALLOWED_HOSTS: list = os.getenv("ALLOWED_HOSTS", "*").split(",")
+    PORT: int = int(os.getenv("PORT", 8000))
     
     # AI Model
     AI_MODEL_NAME: str = "openai/clip-vit-base-patch32"
